@@ -76,6 +76,11 @@ async def chat_completions(
     db: Session = Depends(get_db),
 ):
     messages = _to_dict_messages(req.messages)
+    # 从透传参数中解析结构化输出需求（response_format / tools），交给决策链做能力过滤；
+    # 同时它们仍保留在 extra 中继续透传给上游执行器。
+    extra_raw = req.model_extra or {}
+    response_format = extra_raw.get("response_format")
+    tools = extra_raw.get("tools")
     result = route(
         db,
         messages,
@@ -83,6 +88,8 @@ async def chat_completions(
         # 传入具体值则锁定到该模型。可传模型 ID 或 provider_model 串（二者等价）。
         pinned=req.model or None,
         strategy=req.route_strategy,
+        response_format=response_format,
+        tools=tools,
     )
 
     # 透传给执行器的额外参数（temperature / max_tokens 等）

@@ -28,7 +28,7 @@ _CODE_MARKERS = [
 _VISION_HINTS = ["图", "image", "画", "描述这张", "识别", "ocr", "截图"]
 
 
-def detect_capabilities(messages: Iterable[dict]) -> set[str]:
+def detect_capabilities(messages: Iterable[dict], response_format: Any = None, tools: Any = None) -> set[str]:
     caps: set[str] = {"chat"}
     blob = ""
     has_image = False
@@ -48,6 +48,17 @@ def detect_capabilities(messages: Iterable[dict]) -> set[str]:
     if len(blob) > 4000:
         caps.add("long_context")
     if "tool" in low or "function_call" in low or "调用" in blob or "工具" in blob:
+        caps.add("function_calling")
+
+    # 结构化输出能力需求来自请求参数，与消息文本无关：
+    # response_format.type == "json_schema" / "json_object" 需要对应模式能力；
+    # 携带 tools（function calling）即需要 function_calling 能力。
+    rf_type = response_format.get("type") if isinstance(response_format, dict) else None
+    if rf_type == "json_schema":
+        caps.add("json_schema")
+    elif rf_type == "json_object":
+        caps.add("json_object")
+    if tools:
         caps.add("function_calling")
     return caps
 

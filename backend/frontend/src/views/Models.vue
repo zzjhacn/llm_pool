@@ -156,6 +156,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 const CAPABILITY_OPTIONS = [
   'chat', 'code', 'vision', 'function_calling', 'long_context', 'reasoning', 'embedding', 'tool_use',
+  'json_schema', 'json_object',
 ]
 
 const rows = ref([])

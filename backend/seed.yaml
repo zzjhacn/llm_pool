@@ -43,7 +43,7 @@ models:
     platform_id: aliyun
     name: Qwen-Max
     provider_model: qwen-max
-    capabilities: [chat, code]
+    capabilities: [chat, code, json_object]
     billing_type: token
     price_input: 0.02
     price_output: 0.06
@@ -57,7 +57,7 @@ models:
     platform_id: aliyun
     name: Qwen-VL-Max
     provider_model: qwen-vl-max
-    capabilities: [chat, vision]
+    capabilities: [chat, vision, json_object]
     billing_type: token
     price_input: 0.04
     price_output: 0.12
@@ -71,7 +71,7 @@ models:
     platform_id: openai
     name: GPT-4o
     provider_model: gpt-4o
-    capabilities: [chat, code, vision, function_calling]
+    capabilities: [chat, code, vision, function_calling, json_schema, json_object]
     billing_type: token
     price_input: 0.03
     price_output: 0.06
@@ -84,7 +84,7 @@ models:
     platform_id: openai
     name: GPT-4o-mini
     provider_model: gpt-4o-mini
-    capabilities: [chat, code, vision]
+    capabilities: [chat, code, vision, function_calling, json_schema, json_object]
     billing_type: token
     price_input: 0.005
     price_output: 0.015
@@ -97,7 +97,7 @@ models:
     platform_id: moonshot
     name: Kimi-Call
     provider_model: moonshot-v1-8k
-    capabilities: [chat, long_context]
+    capabilities: [chat, long_context, json_object]
     billing_type: call
     price_per_call: 0.02
     quality_tier: 3
@@ -112,7 +112,7 @@ models:
     platform_id: aliyun
     name: DeepSeek-独立额度
     provider_model: deepseek-chat
-    capabilities: [chat, code]
+    capabilities: [chat, code, json_object]
     billing_type: token
     price_input: 0.006
     price_output: 0.018

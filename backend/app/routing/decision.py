@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -17,6 +17,10 @@ from ..ledger import book
 from .capabilities import detect_capabilities, estimate_prompt_tokens
 
 OUT_TOKENS_EST = 512  # 输出 token 估算，用于成本预估
+
+# 结构化输出相关能力：请求携带 response_format / tools 时必须由模型声明支持，
+# 否则在网关层即被排除（强一致场景不依赖上游强制，避免深层 400）。
+STRUCTURED_CAPS = {"json_schema", "json_object", "function_calling"}
 
 
 @dataclass
@@ -76,8 +80,10 @@ def route(
     messages: list[dict],
     pinned: Optional[str] = None,
     strategy: Optional[str] = None,
+    response_format: Any = None,
+    tools: Any = None,
 ) -> RouteResult:
-    required = detect_capabilities(messages)
+    required = detect_capabilities(messages, response_format=response_format, tools=tools)
     est_prompt = estimate_prompt_tokens(messages)
     strategy = strategy or DEFAULT_ROUTE_STRATEGY
 
@@ -112,14 +118,18 @@ def route(
     if pinned and not candidates:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"指定模型 {pinned} 不可用（平台/能力/到期/额度不满足）",
+            detail=f"指定模型 {pinned} 不可用（平台/能力/到期/额度不满足）；请求需要能力 {sorted(required)}",
         )
 
     if not candidates:
         if ESCAPE_MODEL_ID:
             esc = session.get(models.Model, ESCAPE_MODEL_ID)
-            if esc and esc.enabled and not esc.manual_disabled and (
-                not esc.has_quota or esc.quota_balance_eff > 0
+            if (
+                esc
+                and esc.enabled
+                and not esc.manual_disabled
+                and (not esc.has_quota or esc.quota_balance_eff > 0)
+                and required.issubset(set(esc.capabilities or []))
             ):
                 return RouteResult(
                     model=esc,
@@ -130,6 +140,20 @@ def route(
                     strategy=strategy,
                     escaped=True,
                 )
+        # 结构化输出能力缺口：请求明确需要某结构化模式，但池中无可用模型支持。
+        # 早失败并返回清晰提示，避免把请求转发到不支持的模型而得到深层 400。
+        required_structured = required & STRUCTURED_CAPS
+        if required_structured:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"无可用模型：请求需要结构化输出能力 {sorted(required_structured)}，"
+                    f"但当前模型池中没有匹配的可用模型。"
+                    f"请为支持该模式的模型打上相应能力标签"
+                    f"（json_schema / json_object / function_calling），"
+                    f"或在强一致场景改用支持 json_schema 的模型。"
+                ),
+            )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="无可用模型（候选为空）",
