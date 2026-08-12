@@ -22,13 +22,14 @@
 
     <el-table :data="displayRows" border>
       <el-table-column prop="id" label="ID" width="140" />
-      <el-table-column prop="name" label="名称" width="120" />
+      <el-table-column prop="name" label="名称" width="120" sortable/>
       <el-table-column prop="platform_id" label="平台" width="110" />
-      <el-table-column label="能力" min-width="150">
+      <el-table-column label="能力" prop="capabilities" min-width="150" sortable>
         <template #default="{ row }">
           <el-tag v-for="c in row.capabilities" :key="c" size="small" style="margin-right: 4px">{{ c }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column prop="expired_at" label="到期日期" width="120" :formatter="dateFormatter" sortable/>
       <el-table-column prop="billing_type" label="计费" width="70" />
       <el-table-column label="额度来源" width="110">
         <template #default="{ row }">
@@ -37,7 +38,7 @@
           <el-tag v-else type="info">无额度</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="余额" width="120">
+      <el-table-column label="余额" prop="quota_balance" width="120" sortable>
         <template #default="{ row }">
           <span v-if="row.quota_source === 'none'" style="color: #909399">∞ 无限</span>
           <el-tag v-else :type="row.quota_balance > 0 ? 'success' : 'danger'">
@@ -168,6 +169,10 @@ const form = ref(blank())
 const displayRows = computed(() =>
   filterPlatform.value ? rows.value.filter((r) => r.platform_id === filterPlatform.value) : rows.value,
 )
+
+function dateFormatter(row,col,cellValue,idx) {
+  return cellValue?.split('T')[0] || ''
+}
 
 function blank() {
   return {
