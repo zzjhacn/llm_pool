@@ -1,0 +1,17 @@
+**/__pycache__/
+**/*.pyc
+*.db
+*.sqlite
+.env
+.env.*
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+backend/frontend/node_modules/
+backend/frontend/dist/
+.git/
+.gitignore
+README.md
+**/README.md
+tests/
+*.md

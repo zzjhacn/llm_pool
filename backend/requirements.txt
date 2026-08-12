@@ -1,0 +1,7 @@
+fastapi>=0.115
+uvicorn>=0.30
+sqlalchemy>=2.0
+pydantic>=2.0
+pyyaml>=6.0
+# 执行器（方案A）：真实调用厂商时使用；缺失时自动走 Mock 执行器，本地全链路可测
+litellm>=1.40

@@ -1,0 +1,37 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- 运行时数据 & 密钥 ----
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
+.llm_pool_secret
+*.secret
+
+# ---- 测试 & 缓存 ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# ---- 前端构建产物（由 CI / 容器重新构建） ----
+backend/frontend/node_modules/
+backend/frontend/dist/
+backend/frontend/.vite/
+
+# ---- 编辑器 & OS ----
+.idea/
+.vscode/
+.DS_Store
+
+# ---- 本地工作记忆（非项目产物） ----
+.workbuddy/

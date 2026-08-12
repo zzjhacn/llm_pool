@@ -1,0 +1,141 @@
+# 模型池种子数据：平台 / 额度包 / 模型
+# 仅缺省创建（id 已存在则跳过），不覆盖手动修改。
+
+platforms:
+  - id: aliyun
+    name: 阿里云百炼
+    api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: sk-ALIYUN_PLACEHOLDER
+    provider: openai
+    enabled: true
+  - id: openai
+    name: OpenAI
+    api_base: https://api.openai.com/v1
+    api_key: sk-OPENAI_PLACEHOLDER
+    provider: openai
+    enabled: true
+  - id: moonshot
+    name: Moonshot Kimi
+    api_base: https://api.moonshot.cn/v1
+    api_key: sk-MOONSHOT_PLACEHOLDER
+    provider: openai
+    enabled: false
+
+packages:
+  - id: pkg-aliyun-free
+    name: 阿里云赠金包(token)
+    unit: token
+    capacity: 20000000
+    used: 0
+  - id: pkg-openai-paygo
+    name: OpenAI 按量包(token)
+    unit: token
+    capacity: 1000000
+    used: 0
+  - id: pkg-moonshot-call
+    name: Moonshot 按次包(call)
+    unit: call
+    capacity: 500
+    used: 0
+
+models:
+  - id: qwen-max
+    platform_id: aliyun
+    name: Qwen-Max
+    provider_model: qwen-max
+    capabilities: [chat, code]
+    billing_type: token
+    price_input: 0.02
+    price_output: 0.06
+    quality_tier: 4
+    latency_tier: 3
+    context_window: 32768
+    expired_at: 2026-12-31
+    package_id: pkg-aliyun-free
+    enabled: true
+  - id: qwen-vl-max
+    platform_id: aliyun
+    name: Qwen-VL-Max
+    provider_model: qwen-vl-max
+    capabilities: [chat, vision]
+    billing_type: token
+    price_input: 0.04
+    price_output: 0.12
+    quality_tier: 4
+    latency_tier: 3
+    context_window: 8192
+    expired_at: 2026-12-31
+    package_id: pkg-aliyun-free
+    enabled: true
+  - id: gpt-4o
+    platform_id: openai
+    name: GPT-4o
+    provider_model: gpt-4o
+    capabilities: [chat, code, vision, function_calling]
+    billing_type: token
+    price_input: 0.03
+    price_output: 0.06
+    quality_tier: 5
+    latency_tier: 2
+    context_window: 128000
+    package_id: pkg-openai-paygo
+    enabled: true
+  - id: gpt-4o-mini
+    platform_id: openai
+    name: GPT-4o-mini
+    provider_model: gpt-4o-mini
+    capabilities: [chat, code, vision]
+    billing_type: token
+    price_input: 0.005
+    price_output: 0.015
+    quality_tier: 3
+    latency_tier: 2
+    context_window: 128000
+    package_id: pkg-openai-paygo
+    enabled: true
+  - id: kimi-call
+    platform_id: moonshot
+    name: Kimi-Call
+    provider_model: moonshot-v1-8k
+    capabilities: [chat, long_context]
+    billing_type: call
+    price_per_call: 0.02
+    quality_tier: 3
+    latency_tier: 4
+    context_window: 8000
+    package_id: pkg-moonshot-call
+    enabled: true
+
+  # 模型独立额度示例：不建额度包，直接在模型上设置独立额度（quota_capacity），
+  # 满足"无需共享额度"的场景。计费方式跟随自身 billing_type。
+  - id: deepseek-self
+    platform_id: aliyun
+    name: DeepSeek-独立额度
+    provider_model: deepseek-chat
+    capabilities: [chat, code]
+    billing_type: token
+    price_input: 0.006
+    price_output: 0.018
+    quality_tier: 4
+    latency_tier: 3
+    context_window: 32768
+    package_id: null
+    quota_capacity: 5000000
+    quota_used: 0
+    enabled: true
+
+  # 兜底 escape 模型：不绑定额度包（package_id 为空），候选为空时强制兜底。
+  # 仅具备 chat 能力，正常情况下不会被能力型请求选中，只作最后兜底。
+  - id: escape
+    platform_id: aliyun
+    name: 兜底模型(Escape)
+    provider_model: qwen-max
+    capabilities: [chat]
+    billing_type: token
+    price_input: 0.02
+    price_output: 0.06
+    quality_tier: 1
+    latency_tier: 5
+    context_window: 8192
+    package_id: null
+    enabled: true

@@ -1,0 +1,24 @@
+services:
+  llm-pool:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${LLM_POOL_PORT:-8000}:8000"
+    environment:
+      LLM_POOL_DB_URL: ${LLM_POOL_DB_URL:-sqlite:////app/llm_pool.db}
+      LLM_POOL_ADMIN_USER: ${LLM_POOL_ADMIN_USER:-admin}
+      LLM_POOL_ADMIN_PASS: ${LLM_POOL_ADMIN_PASS:-admin123}
+      LLM_POOL_SECRET: ${LLM_POOL_SECRET:-}
+      LLM_POOL_CORS_ORIGINS: ${LLM_POOL_CORS_ORIGINS:-*}
+      LLM_POOL_GATEWAY_KEYS: ${LLM_POOL_GATEWAY_KEYS:-gpk-default}
+      LLM_POOL_AUTO_SEED: ${LLM_POOL_AUTO_SEED:-1}
+      LLM_POOL_FORCE_MOCK: ${LLM_POOL_FORCE_MOCK:-}
+      LLM_POOL_ESCAPE_MODEL_ID: ${LLM_POOL_ESCAPE_MODEL_ID:-escape}
+    volumes:
+      # 持久化 SQLite（如需 Postgres，请在 .env 中改 LLM_POOL_DB_URL 并去掉此挂载）
+      - llm_pool_data:/app
+    restart: unless-stopped
+
+volumes:
+  llm_pool_data:
