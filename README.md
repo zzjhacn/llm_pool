@@ -15,16 +15,16 @@
 
 ## 特性
 
-| 需求 | 实现 |
-|---|---|
-| 平台 API 地址 + Key 维护 | `Platform` 表；Key 仅存服务端，不下发 |
-| 模型名 / 能力 / 价格 / 额度 | `Model` 表，价格挂模型、额度可挂共享包或模型独立额度 |
-| 多模型共享总 Token 量 | `ResourcePackage` 共享账本，原子扣减 |
-| 按 Token / 按次 计费 | `billing_type` 分叉扣减逻辑 |
-| 平台 / 模型 启用开关 | 双层开关；过期 / 额度耗尽**自动置否**，亦可手动关 |
-| 模型到期日期 | `expired_at`，路由硬过滤 |
-| 四因子自动路由 | 能力 → 余额 → 成本/质量打分 → 降级 |
-| 统一 OpenAI 接口 | `/v1/chat/completions`（含流式）+ `/v1/models` |
+| 需求                 | 实现                                        |
+| ------------------ | ----------------------------------------- |
+| 平台 API 地址 + Key 维护 | `Platform` 表；Key 仅存服务端，不下发                |
+| 模型名 / 能力 / 价格 / 额度 | `Model` 表，价格挂模型、额度可挂共享包或模型独立额度            |
+| 多模型共享总 Token 量     | `ResourcePackage` 共享账本，原子扣减               |
+| 按 Token / 按次 计费    | `billing_type` 分叉扣减逻辑                     |
+| 平台 / 模型 启用开关       | 双层开关；过期 / 额度耗尽**自动置否**，亦可手动关              |
+| 模型到期日期             | `expired_at`，路由硬过滤                        |
+| 四因子自动路由            | 能力 → 余额 → 成本/质量打分 → 降级                    |
+| 统一 OpenAI 接口       | `/v1/chat/completions`（含流式）+ `/v1/models` |
 
 ---
 
@@ -46,7 +46,7 @@
                                          OpenAI / 通义 / ...
 ```
 
-后端：**Python + FastAPI + SQLAlchemy + LiteLLM**
+后端：**Python + FastAPI + SQLAlchemy + LiteLLM**  
 前端：**Vue3 + Vite + Element Plus + ECharts**（后端同源托管 `dist/`）
 
 ---
@@ -77,36 +77,38 @@ docker compose up --build
 
 把 `backend/seed.yaml` 里各平台的 `api_key` 换成真实值，去掉 `LLM_POOL_FORCE_MOCK`，重启即可。
 
+> 或者启动项目后，在管理页面维护
+
 ---
 
 ## 配置
 
 所有配置通过环境变量注入，见 [`.env.example`](.env.example)。核心变量：
 
-| 变量 | 说明 | 默认 |
-|---|---|---|
-| `LLM_POOL_DB_URL` | 数据库地址（SQLite / Postgres） | `sqlite:///./llm_pool.db` |
-| `LLM_POOL_ADMIN_USER/PASS` | 管理后台账号 | `admin` / `admin123` |
-| `LLM_POOL_SECRET` | 管理 token 签名密钥 | 未设置则自动生成随机密钥（持久化于 `.llm_pool_secret`） |
-| `LLM_POOL_CORS_ORIGINS` | 跨域允许来源（逗号分隔） | `*` |
-| `LLM_POOL_GATEWAY_KEYS` | 网关 key（逗号分隔多个） | `gpk-default` |
-| `LLM_POOL_AUTO_SEED` | 空库时导入种子 | `1` |
-| `LLM_POOL_FORCE_MOCK` | 设为 `1` 走 Mock 执行器 | 空 |
-| `LLM_POOL_ESCAPE_MODEL_ID` | 兜底模型 id | `escape` |
+| 变量                         | 说明                       | 默认                                    |
+| -------------------------- | ------------------------ | ------------------------------------- |
+| `LLM_POOL_DB_URL`          | 数据库地址（SQLite / Postgres） | `sqlite:///./llm_pool.db`             |
+| `LLM_POOL_ADMIN_USER/PASS` | 管理后台账号                   | `admin` / `admin123`                  |
+| `LLM_POOL_SECRET`          | 管理 token 签名密钥            | 未设置则自动生成随机密钥（持久化于 `.llm_pool_secret`） |
+| `LLM_POOL_CORS_ORIGINS`    | 跨域允许来源（逗号分隔）             | `*`                                   |
+| `LLM_POOL_GATEWAY_KEYS`    | 网关 key（逗号分隔多个）           | `gpk-default`                         |
+| `LLM_POOL_AUTO_SEED`       | 空库时导入种子                  | `1`                                   |
+| `LLM_POOL_FORCE_MOCK`      | 设为 `1` 走 Mock 执行器        | 空                                     |
+| `LLM_POOL_ESCAPE_MODEL_ID` | 兜底模型 id                  | `escape`                              |
 
 ---
 
 ## 接口速览
 
-| 方法 | 路径 | 鉴权 | 说明 |
-|---|---|---|---|
-| GET | `/health` | 无 | 健康检查 |
-| POST | `/v1/chat/completions` | 网关 key | 统一对话（支持 `stream`） |
-| GET | `/v1/models` | 网关 key | 列出可用模型 |
-| POST | `/admin/login` | 无 | 获取管理 token |
-| GET/POST/PUT/DELETE | `/admin/platforms` `/admin/models` `/admin/packages` | 管理 token | CRUD |
-| GET | `/admin/ledger` | 管理 token | 账本统计 |
-| POST | `/admin/sync` | 管理 token | 依据当前状态刷新模型启停 |
+| 方法                  | 路径                                                   | 鉴权       | 说明                |
+| ------------------- | ---------------------------------------------------- | -------- | ----------------- |
+| GET                 | `/health`                                            | 无        | 健康检查              |
+| POST                | `/v1/chat/completions`                               | 网关 key   | 统一对话（支持 `stream`） |
+| GET                 | `/v1/models`                                         | 网关 key   | 列出可用模型            |
+| POST                | `/admin/login`                                       | 无        | 获取管理 token        |
+| GET/POST/PUT/DELETE | `/admin/platforms` `/admin/models` `/admin/packages` | 管理 token | CRUD              |
+| GET                 | `/admin/ledger`                                      | 管理 token | 账本统计              |
+| POST                | `/admin/sync`                                        | 管理 token | 依据当前状态刷新模型启停      |
 
 ### `model` 参数取值约定（重要）
 
@@ -127,12 +129,12 @@ docker compose up --build
   llm.invoke(msgs)
   ```
   > 注意：传的值必须与页面上的 **`id`** 或 **`厂商模型`** 完全一致；**不是**「厂商键(provider)」字段。
-
 - 若指定的模型当前不可用（平台关闭 / 已过期 / 额度耗尽 / 能力不满足），接口返回 `400` 并说明原因。
 
 ### 厂商键 `provider`（平台级属性）
 
 `provider` 是**平台级**属性（管理页「平台管理 → 编辑 → 厂商键」），由平台端点形态决定，旗下所有模型默认继承：
+
 - OpenAI 兼容端点（`api_base` 含 `compatible-mode` 或结尾 `/v1`）→ `openai`；
 - 厂商原生端点才填 `dashscope` / `azure` / `bedrock` 等。
 
