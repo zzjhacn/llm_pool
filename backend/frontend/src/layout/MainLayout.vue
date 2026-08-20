@@ -13,6 +13,7 @@
         <el-menu-item index="/platforms"><el-icon><Connection /></el-icon>平台管理</el-menu-item>
         <el-menu-item index="/packages"><el-icon><Coin /></el-icon>额度包管理</el-menu-item>
         <el-menu-item index="/ledger"><el-icon><DataLine /></el-icon>账本看板</el-menu-item>
+        <el-menu-item index="/chat-test"><el-icon><ChatDotRound /></el-icon>对话测试</el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
