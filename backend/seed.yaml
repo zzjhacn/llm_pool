@@ -139,3 +139,19 @@ models:
     context_window: 8192
     package_id: null
     enabled: true
+
+  # 向量嵌入模型示例：仅声明 embedding 能力，不参与 chat 路由；
+  # 用于 /v1/embeddings 接口。embedding 只按输入 token 计费（price_output 无意义，置 0）。
+  - id: text-embedding-3-small
+    platform_id: openai
+    name: Text-Embedding-3-Small
+    provider_model: text-embedding-3-small
+    capabilities: [embedding]
+    billing_type: token
+    price_input: 0.0001
+    price_output: 0.0
+    quality_tier: 3
+    latency_tier: 2
+    context_window: 8191
+    package_id: pkg-openai-paygo
+    enabled: true

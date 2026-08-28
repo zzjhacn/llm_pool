@@ -124,3 +124,38 @@ def test_tools_request_requires_function_calling(client):
     # 仅 gpt-4o / gpt-4o-mini 声明 function_calling
     assert sel in ("gpt-4o", "gpt-4o-mini")
 
+
+# ---------------- embeddings 能力过滤 ----------------
+def test_embeddings_request_selects_embedding_capable_model(client):
+    # seed 中仅 text-embedding-3-small 声明了 embedding 能力，应被选中
+    r = client.post(
+        "/v1/embeddings",
+        headers=GW_AUTH,
+        json={"input": "你好世界"},
+    )
+    assert r.status_code == 200
+    assert r.json()["model"] == "text-embedding-3-small"
+
+
+def test_embeddings_pinned_requires_embedding_capable(client):
+    # 锁定到仅 chat 的 qwen-max，缺 embedding 能力应早失败 400
+    r = client.post(
+        "/v1/embeddings",
+        headers=GW_AUTH,
+        json={"model": "qwen-max", "input": "你好世界"},
+    )
+    assert r.status_code == 400
+    assert "embedding" in r.json()["detail"]
+
+
+def test_embeddings_no_capable_model_returns_400(client, auth):
+    # 撤销 text-embedding-3-small 的 embedding 能力，使池中无 embedding 模型
+    client.put(
+        "/admin/models/text-embedding-3-small",
+        headers=auth,
+        json={"capabilities": ["chat"]},
+    )
+    r = client.post("/v1/embeddings", headers=GW_AUTH, json={"input": "你好世界"})
+    assert r.status_code == 400
+    assert "embedding" in r.json()["detail"]
+

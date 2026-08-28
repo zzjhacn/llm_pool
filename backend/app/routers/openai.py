@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..db import get_db
-from ..executor import complete
+from ..executor import complete, embed
 from ..ledger import book
 from ..routing import capabilities
 from ..routing.decision import route
@@ -32,6 +32,15 @@ class ChatRequest(BaseModel):
     stream: bool = False
     temperature: float | None = None
     max_tokens: int | None = None
+    route_strategy: str | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class EmbeddingRequest(BaseModel):
+    model: str | None = None
+    input: str | list  # 字符串或字符串列表（批量）
+    encoding_format: str | None = None  # 'float' | 'base64'
+    dimensions: int | None = None
     route_strategy: str | None = None
     model_config = ConfigDict(extra="allow")
 
@@ -114,12 +123,15 @@ async def chat_completions(
         result.strategy,
         result.candidates,
     )
+    logger.info(f"{rid} - [REQUEST] {messages}")
 
     if not req.stream:
         data = await complete(result.model, result.model.platform, messages, stream=False, **extra)
         data["model"] = result.model.id
         usage = data.get("usage") or {}
         _deduct(db, result, usage, rid, client_key)
+        logger.info(f"{rid} - [RESPONSE] {data}")
+        logger.info(f"{rid} - [USAGE] {usage}")
         return data
 
     # ---- 流式 ----
@@ -145,6 +157,64 @@ async def chat_completions(
         _deduct(db, result, usage, rid, client_key)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/v1/embeddings")
+async def embeddings(
+    req: EmbeddingRequest,
+    request: Request,
+    client_key: str = Depends(require_gateway_key),
+    db: Session = Depends(get_db),
+):
+    """OpenAI 兼容 embeddings。按 embedding 能力选模型后透传给厂商 LiteLLM。"""
+    result = route(
+        db,
+        None,
+        pinned=req.model or None,
+        strategy=req.route_strategy,
+        kind="embedding",
+    )
+
+    # 透传给执行器的额外参数（encoding_format / dimensions 等）
+    extra = {k: v for k, v in (req.model_extra or {}).items()}
+    if req.encoding_format:
+        extra["encoding_format"] = req.encoding_format
+    if req.dimensions:
+        extra["dimensions"] = req.dimensions
+
+    rid = "req-" + uuid.uuid4().hex[:16]
+    logger.info(
+        "[ROUTE] embeddings request_id=%s pinned=%s -> model_id=%s platform=%s provider_model=%s strategy=%s",
+        rid,
+        req.model or None,
+        result.model.id,
+        result.model.platform_id,
+        result.model.provider_model,
+        result.strategy,
+    )
+
+    data = await embed(result.model, result.model.platform, req.input, **extra)
+    data["model"] = result.model.id
+
+    usage = data.get("usage") or {}
+    _deduct(
+        db,
+        result,
+        {
+            "prompt_tokens": usage.get("prompt_tokens", 0) or 0,
+            "completion_tokens": 0,  # embeddings 无补全 token
+            "total_tokens": usage.get("total_tokens", 0) or 0,
+        },
+        rid,
+        client_key,
+    )
+    logger.info(
+        "%s - [EMBEDDING] model=%s usage=%s",
+        rid,
+        result.model.id,
+        usage,
+    )
+    return data
 
 
 def _deduct(db: Session, result, usage: dict, rid: str, client_key: str) -> None:

@@ -119,6 +119,79 @@ async def _litellm_stream(resp) -> AsyncIterator[dict]:
         yield chunk.model_dump()
 
 
+async def embed(
+    model_row: "models.Model",
+    platform_row: "models.Platform",
+    input: "str | list",
+    encoding_format: str | None = None,
+    **kwargs: Any,
+) -> dict:
+    """OpenAI 兼容 embeddings：返回 {'object':'list','data':[{embedding,...}],'model','usage'}。
+
+    input 可为字符串或字符串列表（批量）。encoding_format 可选 'float' | 'base64'。
+    异常时仅记录日志后原样抛出，不改变对外行为。
+    """
+    litellm = _load_litellm()
+    if os.getenv("LLM_POOL_FORCE_MOCK") == "1":
+        litellm = None
+    call_kwargs = {
+        "model": _litellm_model_string(model_row, platform_row),
+        "api_base": platform_row.api_base,
+        "api_key": platform_row.api_key,
+        "input": input,
+    }
+    if encoding_format:
+        call_kwargs["encoding_format"] = encoding_format
+    call_kwargs.update(kwargs)
+
+    if litellm is not None:
+        logger.info(
+            "[CALL] embedding litellm_model=%s platform=%s api_base=%s",
+            call_kwargs["model"],
+            platform_row.id,
+            platform_row.api_base,
+        )
+        try:
+            resp = await litellm.aembedding(**call_kwargs)
+            return resp.model_dump()
+        except Exception as exc:  # 仅记录，原样抛出，由上层转换为 4xx/5xx
+            logger.error(
+                "[CALL_FAIL] embedding model=%s platform=%s error=%s: %s | input=%s",
+                call_kwargs["model"],
+                platform_row.id,
+                type(exc).__name__,
+                exc,
+                _truncate_log_value({"input": input}),
+            )
+            raise
+
+    # ---- Mock 执行器 ----
+    items = input if isinstance(input, list) else [input]
+    n = len(items)
+    dim = 8  # 固定维度，便于前端/测试断言
+    data = []
+    for i in range(n):
+        vec = [round(0.01 * ((i * 3 + k) % dim + 1), 4) for k in range(dim)]
+        data.append({"object": "embedding", "index": i, "embedding": vec})
+    usage = {"prompt_tokens": n * 2, "total_tokens": n * 2}
+    return {
+        "object": "list",
+        "data": data,
+        "model": model_row.id,
+        "usage": usage,
+    }
+
+
+def _truncate_log_value(value, limit: int = 2000) -> str:
+    """把日志payload截断，避免超大 input 撑爆日志（这里仅截断字符串长度）。"""
+    import json as _json
+
+    text = _json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
+    if len(text) > limit:
+        return text[:limit] + f"...(truncated, total {len(text)})"
+    return text
+
+
 async def _mock_stream(rid: str, model_id: str, content: str, usage: dict) -> AsyncIterator[dict]:
     yield {
         "id": rid,

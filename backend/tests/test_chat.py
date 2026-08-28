@@ -61,3 +61,26 @@ def test_pin_by_id_locks_model(client):
     )
     assert r.status_code == 200
     assert r.json()["model"] == "qwen-max"
+
+
+def test_embeddings_returns_openai_shape(client):
+    # /v1/embeddings 在 mock 下应返回 OpenAI 兼容的 list 结构，并由决策链选到 embedding 模型
+    r = client.post(
+        "/v1/embeddings",
+        headers=GW_AUTH,
+        json={"input": ["你好", "世界"]},
+    )
+    assert r.status_code == 200
+    d = r.json()
+    assert d["object"] == "list"
+    assert isinstance(d["data"], list) and len(d["data"]) == 2
+    assert d["data"][0]["object"] == "embedding"
+    assert d["model"] == "text-embedding-3-small"
+    assert d["usage"]["prompt_tokens"] > 0
+
+
+def test_embeddings_records_ledger(client, auth):
+    before = client.get("/admin/ledger", headers=auth).json()["total_calls"]
+    client.post("/v1/embeddings", headers=GW_AUTH, json={"input": "你好世界"})
+    after = client.get("/admin/ledger", headers=auth).json()["total_calls"]
+    assert after == before + 1

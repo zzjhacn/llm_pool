@@ -77,15 +77,27 @@ def _expiry_key(m: "models.Model") -> float:
 
 def route(
     session: Session,
-    messages: list[dict],
+    messages: list[dict] | None = None,
     pinned: Optional[str] = None,
     strategy: Optional[str] = None,
     response_format: Any = None,
     tools: Any = None,
+    kind: str = "chat",
 ) -> RouteResult:
-    required = detect_capabilities(messages, response_format=response_format, tools=tools)
-    est_prompt = estimate_prompt_tokens(messages)
+    """按请求类型路由。
+
+    - kind="chat"（默认）：从 messages + response_format/tools 解析所需能力。
+    - kind="embedding"：所需能力恒为 {"embedding"}，不看 messages。
+    """
+    if kind == "embedding":
+        required: set[str] = {"embedding"}
+        est_prompt = 0
+    else:
+        required = detect_capabilities(messages or [], response_format=response_format, tools=tools)
+        est_prompt = estimate_prompt_tokens(messages or [])
     strategy = strategy or DEFAULT_ROUTE_STRATEGY
+    # embedding 没有输出 token，成本仅按输入估算
+    est_completion = 0 if kind == "embedding" else OUT_TOKENS_EST
 
     reasons: dict[str, list[str]] = {}
     candidates: list[tuple[models.Model, float]] = []
@@ -112,7 +124,7 @@ def route(
         if pinned and m.id != pinned and m.provider_model != pinned:
             reasons[m.id].append("not_pinned")
             continue
-        est_cost = book.compute_cost(m, est_prompt, OUT_TOKENS_EST)
+        est_cost = book.compute_cost(m, est_prompt, est_completion)
         candidates.append((m, est_cost))
 
     if pinned and not candidates:
@@ -134,7 +146,7 @@ def route(
                 return RouteResult(
                     model=esc,
                     package=esc.package,
-                    est_cost=book.compute_cost(esc, est_prompt, OUT_TOKENS_EST),
+                    est_cost=book.compute_cost(esc, est_prompt, est_completion),
                     candidates=[],
                     reasons=reasons,
                     strategy=strategy,
@@ -142,6 +154,14 @@ def route(
                 )
         # 结构化输出能力缺口：请求明确需要某结构化模式，但池中无可用模型支持。
         # 早失败并返回清晰提示，避免把请求转发到不支持的模型而得到深层 400。
+        if kind == "embedding":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "无可用模型：请求需要 embedding 能力，但当前模型池中"
+                    "没有匹配的可用模型。请为支持 embeddings 的模型打上 embedding 能力标签。"
+                ),
+            )
         required_structured = required & STRUCTURED_CAPS
         if required_structured:
             raise HTTPException(
