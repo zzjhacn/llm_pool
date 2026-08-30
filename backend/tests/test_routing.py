@@ -1,4 +1,6 @@
 """决策链路由：能力解析 → 硬过滤 → 打分选中 / 兜底。"""
+from datetime import datetime, timedelta, timezone
+
 from tests.conftest import GW_AUTH
 
 
@@ -25,11 +27,64 @@ def test_vision_request_selects_vision_capable_model(client):
 def test_pinned_model(client):
     r = _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
     assert r.json()["model"] == "gpt-4o-mini"
+    # 指定模型可用时不产生降级响应头
+    assert "X-LLM-Pool-Pin-Dropped" not in r.headers
 
 
-def test_pinned_unavailable_returns_400(client):
+# ---------------- 指定模型不可用 → 按未传处理（自动选择） ----------------
+def test_pinned_nonexistent_falls_back_to_auto(client):
+    """模型名在池中不存在 → 不再 400，按未传处理进入自动选择。"""
     r = _chat(client, [{"role": "user", "content": "hi"}], model="does-not-exist")
+    assert r.status_code == 200
+    assert r.json()["model"] != "does-not-exist"
+    assert r.headers["X-LLM-Pool-Pin-Requested"] == "does-not-exist"
+    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "not_found"
+
+
+def test_pinned_expired_falls_back_to_auto(client, auth):
+    """指定模型已过期 → 按未传处理。"""
+    client.put("/admin/models/gpt-4o-mini", headers=auth, json={"expired_at": "2020-01-01"})
+    r = _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
+    assert r.status_code == 200
+    assert r.json()["model"] != "gpt-4o-mini"
+    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "expired"
+
+
+def test_pinned_quota_exhausted_falls_back_to_auto(client, auth):
+    """指定模型额度耗尽 → 按未传处理。"""
+    # gpt-4o-mini 挂在共享包 pkg-openai-paygo（容量 1000000）上，用满即耗尽
+    client.put("/admin/packages/pkg-openai-paygo", headers=auth, json={"used": 1000000})
+    r = _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
+    assert r.status_code == 200
+    assert r.json()["model"] != "gpt-4o-mini"
+    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "quota_exhausted"
+
+
+def test_pinned_provider_model_name_works(client):
+    """用 provider_model 名指定（与 id 等价），可用时正常锁定。"""
+    r = _chat(client, [{"role": "user", "content": "hi"}], model="deepseek-chat")
+    assert r.status_code == 200
+    assert r.json()["model"] == "deepseek-self"
+
+
+def test_pinned_disabled_still_returns_400(client, auth):
+    """被显式停用的模型不自动降级（管理员主动操作），仍早失败。"""
+    client.put("/admin/models/gpt-4o-mini", headers=auth, json={"manual_disabled": True})
+    r = _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
     assert r.status_code == 400
+    assert "X-LLM-Pool-Pin-Dropped" not in r.headers
+
+
+def test_pinned_fallback_still_honors_capabilities(client):
+    """降级为自动选择后，能力硬过滤依然生效（json_schema 只能落在 gpt-4o 系）。"""
+    r = _chat(
+        client,
+        [{"role": "user", "content": "请回答"}],
+        model="does-not-exist",
+        response_format={"type": "json_schema", "json_schema": {"name": "X"}},
+    )
+    assert r.status_code == 200
+    assert r.json()["model"] in ("gpt-4o", "gpt-4o-mini")
 
 
 def test_lowest_cost_strategy_picks_cheapest(client):
@@ -39,11 +94,20 @@ def test_lowest_cost_strategy_picks_cheapest(client):
 
 
 def test_expiring_soon_prefers_nearest_expiry(client, auth):
+    # 到期时间用相对值，避免硬编码日期随真实时间推移而失效（seed 里 qwen-* 为 2026-12-31）
+    now = datetime.now(timezone.utc)
+
+    def _iso(days: int) -> str:
+        return (now + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    # 把 seed 中固定到期的两个模型推远，保证不干扰排序
+    for mid in ("qwen-max", "qwen-vl-max"):
+        client.put(f"/admin/models/{mid}", headers=auth, json={"expired_at": _iso(400)})
     # 给两个 chat 候选设置不同到期时间，其余 chat 候选无到期（排最后）
-    client.put("/admin/models/gpt-4o-mini", headers=auth, json={"expired_at": "2026-08-20T00:00:00"})
-    client.put("/admin/models/gpt-4o", headers=auth, json={"expired_at": "2026-09-01T00:00:00"})
+    client.put("/admin/models/gpt-4o-mini", headers=auth, json={"expired_at": _iso(3)})
+    client.put("/admin/models/gpt-4o", headers=auth, json={"expired_at": _iso(30)})
     r = _chat(client, [{"role": "user", "content": "hi"}], route_strategy="expiring_soon")
-    # 临近过期的 gpt-4o-mini(08-20) 应先于 gpt-4o(09-01)、qwen-max(12-31) 及无到期者被选中
+    # 临近过期的 gpt-4o-mini(+3d) 应先于 gpt-4o(+30d)、qwen-*(+400d) 及无到期者被选中
     assert r.json()["model"] == "gpt-4o-mini"
 
 
@@ -146,6 +210,18 @@ def test_embeddings_pinned_requires_embedding_capable(client):
     )
     assert r.status_code == 400
     assert "embedding" in r.json()["detail"]
+
+
+def test_embeddings_pinned_nonexistent_falls_back_to_auto(client):
+    # embedding 指定一个不存在的模型名 → 按未传处理，落到唯一的 embedding 模型
+    r = client.post(
+        "/v1/embeddings",
+        headers=GW_AUTH,
+        json={"model": "nope-embedding", "input": "你好世界"},
+    )
+    assert r.status_code == 200
+    assert r.json()["model"] == "text-embedding-3-small"
+    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "not_found"
 
 
 def test_embeddings_no_capable_model_returns_400(client, auth):

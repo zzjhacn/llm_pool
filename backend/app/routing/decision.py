@@ -1,10 +1,12 @@
 """决策链：请求 → 能力解析 → 四层硬过滤 → 成本/质量打分 → 选中 / 降级。"""
 
+import logging
 from dataclasses import dataclass, field
 from datetime import timezone
 from typing import Any, Optional
 
 from fastapi import HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -16,11 +18,21 @@ from ..config import (
 from ..ledger import book
 from .capabilities import detect_capabilities, estimate_prompt_tokens
 
+logger = logging.getLogger("llm_pool")
+
 OUT_TOKENS_EST = 512  # 输出 token 估算，用于成本预估
 
 # 结构化输出相关能力：请求携带 response_format / tools 时必须由模型声明支持，
 # 否则在网关层即被排除（强一致场景不依赖上游强制，避免深层 400）。
 STRUCTURED_CAPS = {"json_schema", "json_object", "function_calling"}
+
+# 指定模型被「按未传处理」（回退自动选择）的原因文案
+PIN_DROP_REASONS = {
+    "not_found": "模型中不存在该名称",
+    "expired": "模型已过期",
+    "quota_exhausted": "模型额度已耗尽",
+    "unavailable": "模型不可用",
+}
 
 
 @dataclass
@@ -32,6 +44,48 @@ class RouteResult:
     reasons: dict[str, list[str]] = field(default_factory=dict)
     strategy: str = DEFAULT_ROUTE_STRATEGY
     escaped: bool = False
+    # 客户端请求时指定的模型名（pinned），以及它是否因不可用而被降级为「未传」
+    pin_requested: Optional[str] = None
+    pin_dropped: Optional[str] = None
+
+
+def _resolve_pin(session: Session, pinned: str) -> tuple[Optional[str], Optional[str]]:
+    """判定客户端指定的模型名是否继续生效。
+
+    返回 (生效的 pinned, 丢弃原因)；丢弃原因非 None 时表示该模型「按未传处理」，
+    请求进入自动选择逻辑，不再因它报 400。
+
+    仅以下三种情况降级为自动选择：
+      - not_found：池中不存在该名称（既不匹配 Model.id 也不匹配 provider_model）
+      - expired：存在但已过期
+      - quota_exhausted：存在但额度耗尽
+
+    其余不可用原因（平台/模型被停用、能力不匹配等）属于显式配置或强一致约束，
+    不自动降级，仍走原来的 400 早失败，避免悄悄把请求转到不相干的模型上。
+    """
+    matches = (
+        session.query(models.Model)
+        .filter(or_(models.Model.id == pinned, models.Model.provider_model == pinned))
+        .all()
+    )
+    if not matches:
+        return None, "not_found"
+
+    # 同名可能命中多个平台上的模型：只要有一个可用就继续锁定
+    drop_reasons: set[str] = set()
+    for m in matches:
+        if m.is_expired:
+            drop_reasons.add("expired")
+        elif m.quota_exhausted:
+            drop_reasons.add("quota_exhausted")
+        else:
+            return pinned, None
+
+    if drop_reasons == {"expired"}:
+        return None, "expired"
+    if drop_reasons == {"quota_exhausted"}:
+        return None, "quota_exhausted"
+    return None, "unavailable"
 
 
 def _score(candidates: list[tuple["models.Model", float]], strategy: str):
@@ -99,6 +153,18 @@ def route(
     # embedding 没有输出 token，成本仅按输入估算
     est_completion = 0 if kind == "embedding" else OUT_TOKENS_EST
 
+    # 指定模型不可用（不存在 / 已过期 / 额度耗尽）时按「未传」处理，进入自动选择
+    pin_effective: Optional[str] = pinned
+    pin_dropped: Optional[str] = None
+    if pinned:
+        pin_effective, pin_dropped = _resolve_pin(session, pinned)
+        if pin_dropped:
+            logger.warning(
+                "[ROUTE] pinned=%s 不可用（%s），按未传处理，进入自动选择",
+                pinned,
+                PIN_DROP_REASONS.get(pin_dropped, pin_dropped),
+            )
+
     reasons: dict[str, list[str]] = {}
     candidates: list[tuple[models.Model, float]] = []
 
@@ -121,16 +187,16 @@ def route(
         if m.has_quota and m.quota_balance_eff <= 0:
             reasons[m.id].append("quota_exhausted")
             continue
-        if pinned and m.id != pinned and m.provider_model != pinned:
+        if pin_effective and m.id != pin_effective and m.provider_model != pin_effective:
             reasons[m.id].append("not_pinned")
             continue
         est_cost = book.compute_cost(m, est_prompt, est_completion)
         candidates.append((m, est_cost))
 
-    if pinned and not candidates:
+    if pin_effective and not candidates:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"指定模型 {pinned} 不可用（平台/能力/到期/额度不满足）；请求需要能力 {sorted(required)}",
+            detail=f"指定模型 {pin_effective} 不可用（平台/模型被停用或能力不满足）；请求需要能力 {sorted(required)}",
         )
 
     if not candidates:
@@ -151,6 +217,8 @@ def route(
                     reasons=reasons,
                     strategy=strategy,
                     escaped=True,
+                    pin_requested=pinned,
+                    pin_dropped=pin_dropped,
                 )
         # 结构化输出能力缺口：请求明确需要某结构化模式，但池中无可用模型支持。
         # 早失败并返回清晰提示，避免把请求转发到不支持的模型而得到深层 400。
@@ -188,4 +256,6 @@ def route(
         candidates=[c[0].id for c in ranked],
         reasons=reasons,
         strategy=strategy,
+        pin_requested=pinned,
+        pin_dropped=pin_dropped,
     )

@@ -10,8 +10,10 @@ class _FakeModel:
 
 
 class _FakePlatform:
-    def __init__(self, provider="openai"):
+    def __init__(self, provider="openai", api_base="https://api.example.com/v1", api_key="sk-test"):
         self.provider = provider
+        self.api_base = api_base
+        self.api_key = api_key
 
 
 def test_prefix_added_when_provider_set():

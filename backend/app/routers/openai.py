@@ -6,7 +6,7 @@ import uuid
 from fastapi import APIRouter, Depends, Request
 
 logger = logging.getLogger("llm_pool")
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -43,6 +43,19 @@ class EmbeddingRequest(BaseModel):
     dimensions: int | None = None
     route_strategy: str | None = None
     model_config = ConfigDict(extra="allow")
+
+
+def _pin_headers(result) -> dict[str, str]:
+    """指定模型被降级为自动选择时，回写响应头让调用方感知实际用的是哪个模型。
+
+    仅当 pin 因「不存在 / 已过期 / 额度耗尽」被丢弃时才出现。
+    """
+    if not result.pin_dropped:
+        return {}
+    return {
+        "X-LLM-Pool-Pin-Requested": result.pin_requested or "",
+        "X-LLM-Pool-Pin-Dropped": result.pin_dropped,
+    }
 
 
 def _to_dict_messages(messages: list[ChatMessage]) -> list[dict]:
@@ -112,9 +125,10 @@ async def chat_completions(
 
     # 记录本次路由结果（每次调用必打）：选中模型、是否降级兜底、候选列表
     logger.info(
-        "[ROUTE] request_id=%s pinned=%s -> model_id=%s platform=%s provider=%s provider_model=%s escaped=%s strategy=%s candidates=%s",
+        "[ROUTE] request_id=%s pinned=%s pin_dropped=%s -> model_id=%s platform=%s provider=%s provider_model=%s escaped=%s strategy=%s candidates=%s",
         rid,
         req.model or None,
+        result.pin_dropped or "-",
         result.model.id,
         result.model.platform_id,
         getattr(result.model, "provider", "") or "",
@@ -132,7 +146,7 @@ async def chat_completions(
         _deduct(db, result, usage, rid, client_key)
         logger.info(f"{rid} - [RESPONSE] {data}")
         logger.info(f"{rid} - [USAGE] {usage}")
-        return data
+        return JSONResponse(content=data, headers=_pin_headers(result))
 
     # ---- 流式 ----
     async def event_stream():
@@ -156,7 +170,11 @@ async def chat_completions(
             usage = {"prompt_tokens": prompt_t, "completion_tokens": comp_t, "total_tokens": prompt_t + comp_t}
         _deduct(db, result, usage, rid, client_key)
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers=_pin_headers(result),
+    )
 
 
 @router.post("/v1/embeddings")
@@ -184,9 +202,10 @@ async def embeddings(
 
     rid = "req-" + uuid.uuid4().hex[:16]
     logger.info(
-        "[ROUTE] embeddings request_id=%s pinned=%s -> model_id=%s platform=%s provider_model=%s strategy=%s",
+        "[ROUTE] embeddings request_id=%s pinned=%s pin_dropped=%s -> model_id=%s platform=%s provider_model=%s strategy=%s",
         rid,
         req.model or None,
+        result.pin_dropped or "-",
         result.model.id,
         result.model.platform_id,
         result.model.provider_model,
@@ -214,7 +233,7 @@ async def embeddings(
         result.model.id,
         usage,
     )
-    return data
+    return JSONResponse(content=data, headers=_pin_headers(result))
 
 
 def _deduct(db: Session, result, usage: dict, rid: str, client_key: str) -> None:
