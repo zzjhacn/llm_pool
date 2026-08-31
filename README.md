@@ -95,6 +95,8 @@ docker compose up --build
 | `LLM_POOL_AUTO_SEED`       | 空库时导入种子                  | `1`                                   |
 | `LLM_POOL_FORCE_MOCK`      | 设为 `1` 走 Mock 执行器        | 空                                     |
 | `LLM_POOL_ESCAPE_MODEL_ID` | 兜底模型 id                  | `escape`                              |
+| `LLM_POOL_ROUTE_STRATEGY` | 全局默认路由策略             | `balanced`（另含 lowest_cost / highest_quality / lowest_latency / expiring_soon） |
+| `LLM_POOL_QUALITY_WEIGHT`  | balanced 下质量权重（0~1）  | `0.6`                                 |
 
 ---
 
@@ -129,7 +131,7 @@ docker compose up --build
   llm.invoke(msgs)
   ```
   > 注意：传的值必须与页面上的 **`id`** 或 **`厂商模型`** 完全一致；**不是**「厂商键(provider)」字段。
-- 若指定的模型当前不可用（平台关闭 / 已过期 / 额度耗尽 / 能力不满足），接口返回 `400` 并说明原因。
+- 若指定的模型当前**基础不可用**（不存在 / 平台关闭 / 已过期 / 额度耗尽），网关按「未传」处理**自动改选**可用模型，并通过响应头 `X-LLM-Pool-Pin-Dropped`（`not_found` / `unavailable`）告知降级；**仅当模型存在且基础可用、但能力不满足请求**（如要 `json_schema` 却指定仅 `json_object` 的模型）才返回 `400`。详见 [`design/04-决策链路由算法.md`](design/04-决策链路由算法.md)。
 
 ### 厂商键 `provider`（平台级属性）
 
@@ -144,7 +146,7 @@ docker compose up --build
 
 ### 路由策略
 
-全局默认策略由 `LLM_POOL_ROUTE_STRATEGY` 控制，可选：`balanced`（默认，质量/成本权衡）、`lowest_cost`、`highest_quality`、`lowest_latency`、`expiring_soon`（临近过期的模型优先，置于 balanced 之前）。调用时也可在请求体传 `route_strategy` 字段临时覆盖。
+全局默认策略由 `LLM_POOL_ROUTE_STRATEGY` 控制（默认 `balanced`），可选：`balanced`（质量/成本权衡）、`lowest_cost`、`highest_quality`、`lowest_latency`、`expiring_soon`（临近过期的模型优先消耗）。调用时也可在 `/v1/chat/completions`、`/v1/embeddings` 请求体传 `route_strategy` 字段临时覆盖。完整算法、pin 降级规则与可观测性见 [`design/04-决策链路由算法.md`](design/04-决策链路由算法.md)。
 
 ---
 
@@ -186,3 +188,11 @@ llm_pool/
 ## License
 
 [MIT](LICENSE) © 2026 Gray
+信用卡
+8.18 115.66 - uber
+8.13 88.64 - uber
+8.11 1098.43 - dopadonburianddesse
+8.9 678.77 - pancakesontherocks
+8.9 475.76 - pancakesontherocks
+
+
