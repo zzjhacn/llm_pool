@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..db import get_db
-from ..executor import complete, embed
+from ..executor import complete, embed, is_quota_exhausted_forbidden
 from ..ledger import book
 from ..routing import capabilities
 from ..routing.decision import route
@@ -56,6 +56,31 @@ def _pin_headers(result) -> dict[str, str]:
         "X-LLM-Pool-Pin-Requested": result.pin_requested or "",
         "X-LLM-Pool-Pin-Dropped": result.pin_dropped,
     }
+
+
+def _disable_model_on_remote_403(db: Session, model: "models.Model") -> None:
+    """远端返回 403 额度耗尽(quota exhausted)时，把模型钉死为「手动关闭」。
+
+    - 置 `manual_disabled=True`（同时 `enabled=False`），复用既有手动关闭语义；
+    - 路由自动排除该模型、/v1/models 不再列出；
+    - **钉死不被复活**：`sync_model_states` 对 `manual_disabled` 优先级最高、不会重启用，
+      因此即便本地账本认为额度充足也不会被自动拉起（直到管理员显式开启）；
+    - 标记失败不影响已抛出的原始异常继续向上冒泡。
+    """
+    if getattr(model, "manual_disabled", False):
+        return  # 已钉死，避免重复写库
+    model.manual_disabled = True
+    model.enabled = False
+    try:
+        db.commit()
+        logger.warning(
+            "[ROUTE] 模型 %s 远端返回 403 额度耗尽(quota exhausted)，已自动钉死为手动关闭(manual_disabled=True)；"
+            "需管理员在管理台显式「启用」方可恢复。",
+            model.id,
+        )
+    except Exception:
+        db.rollback()
+        logger.exception("[ROUTE] 标记模型失效失败 model=%s", model.id)
 
 
 def _to_dict_messages(messages: list[ChatMessage]) -> list[dict]:
@@ -140,7 +165,12 @@ async def chat_completions(
     logger.info(f"{rid} - [REQUEST] {messages}")
 
     if not req.stream:
-        data = await complete(result.model, result.model.platform, messages, stream=False, **extra)
+        try:
+            data = await complete(result.model, result.model.platform, messages, stream=False, **extra)
+        except Exception as exc:
+            if is_quota_exhausted_forbidden(exc):
+                _disable_model_on_remote_403(db, result.model)
+            raise
         data["model"] = result.model.id
         usage = data.get("usage") or {}
         _deduct(db, result, usage, rid, client_key)
@@ -152,14 +182,19 @@ async def chat_completions(
     async def event_stream():
         content_parts: list[str] = []
         usage_captured: dict = {}
-        async for chunk in await complete(result.model, result.model.platform, messages, stream=True, **extra):
-            chunk["model"] = result.model.id
-            if chunk.get("usage"):
-                usage_captured = chunk["usage"]
-            delta = chunk.get("choices", [{}])[0].get("delta", {})
-            if isinstance(delta.get("content"), str):
-                content_parts.append(delta["content"])
-            yield "data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n"
+        try:
+            async for chunk in await complete(result.model, result.model.platform, messages, stream=True, **extra):
+                chunk["model"] = result.model.id
+                if chunk.get("usage"):
+                    usage_captured = chunk["usage"]
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                if isinstance(delta.get("content"), str):
+                    content_parts.append(delta["content"])
+                yield "data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n"
+        except Exception as exc:
+            if is_quota_exhausted_forbidden(exc):
+                _disable_model_on_remote_403(db, result.model)
+            raise
         yield "data: [DONE]\n\n"
 
         if usage_captured:
@@ -212,7 +247,12 @@ async def embeddings(
         result.strategy,
     )
 
-    data = await embed(result.model, result.model.platform, req.input, **extra)
+    try:
+        data = await embed(result.model, result.model.platform, req.input, **extra)
+    except Exception as exc:
+        if is_quota_exhausted_forbidden(exc):
+            _disable_model_on_remote_403(db, result.model)
+        raise
     data["model"] = result.model.id
 
     usage = data.get("usage") or {}

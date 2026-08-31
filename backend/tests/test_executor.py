@@ -81,3 +81,53 @@ def test_embed_mock_batch_list_returns_multiple(monkeypatch):
     assert [d["index"] for d in out["data"]] == [0, 1, 2]
     assert out["usage"]["prompt_tokens"] == 6  # 3 条 × 2 mock token
 
+
+# ---------------- 远端 403 额度耗尽识别 ----------------
+def test_is_quota_exhausted_forbidden_detects_free_tier():
+    from app.executor import is_quota_exhausted_forbidden
+
+    class Fake(Exception):
+        status_code = 403
+
+        def __str__(self):
+            return (
+                "Error code: 403 - {'error': {'message': 'Free quota exhausted. "
+                "AllocationQuota.FreeTierOnly'}}"
+            )
+
+    assert is_quota_exhausted_forbidden(Fake()) is True
+
+
+def test_is_quota_exhausted_forbidden_ignores_other_403():
+    from app.executor import is_quota_exhausted_forbidden
+
+    class Fake(Exception):
+        status_code = 403
+
+        def __str__(self):
+            return "Error code: 403 - {'error': {'message': 'Region not supported'}}"
+
+    assert is_quota_exhausted_forbidden(Fake()) is False
+
+
+def test_is_quota_exhausted_forbidden_ignores_rate_limit_429():
+    from app.executor import is_quota_exhausted_forbidden
+
+    class Fake(Exception):
+        status_code = 429
+
+        def __str__(self):
+            return "Error code: 429 - {'error': {'message': 'Rate limit exceeded, quota ...'}}"
+
+    assert is_quota_exhausted_forbidden(Fake()) is False
+
+
+def test_is_quota_exhausted_forbidden_requires_403_signal():
+    from app.executor import is_quota_exhausted_forbidden
+
+    class Fake(Exception):
+        def __str__(self):
+            return "quota exhausted but status unknown"
+
+    assert is_quota_exhausted_forbidden(Fake()) is False
+

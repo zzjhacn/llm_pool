@@ -229,11 +229,14 @@ def delete_model(mid: str, db: Session = Depends(get_db)):
 
 @router.post("/models/{mid}/toggle", response_model=ModelOut, dependencies=[Depends(require_admin)])
 def toggle_model(mid: str, enabled: bool, db: Session = Depends(get_db)):
-    """手动启停：enabled=True 解除手动关闭；enabled=False 置手动关闭（优先级最高）。"""
+    """手动启停：enabled=True 解除手动关闭并恢复上线（含远端 403 自动下线的模型）；enabled=False 置手动关闭（优先级最高）。"""
     m = db.get(models.Model, mid)
     if not m:
         raise HTTPException(status_code=404, detail="模型不存在")
-    m.manual_disabled = not enabled
+    if enabled:
+        m.manual_disabled = False
+    else:
+        m.manual_disabled = True
     m.enabled = enabled
     db.commit()
     db.refresh(m)

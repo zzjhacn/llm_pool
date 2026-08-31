@@ -34,6 +34,7 @@ def sync_model_states(session: Session) -> None:
     """
     now = datetime.now(timezone.utc)
     for m in session.query(models.Model).all():
+        # 手动关闭优先级最高，不被自动逻辑覆盖
         if m.manual_disabled:
             m.enabled = False
             continue

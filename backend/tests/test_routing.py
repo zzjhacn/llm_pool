@@ -1,4 +1,5 @@
 """决策链路由：能力解析 → 硬过滤 → 打分选中 / 兜底。"""
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from tests.conftest import GW_AUTH
@@ -257,4 +258,87 @@ def test_embeddings_no_capable_model_returns_400(client, auth):
     r = client.post("/v1/embeddings", headers=GW_AUTH, json={"input": "你好世界"})
     assert r.status_code == 400
     assert "embedding" in r.json()["detail"]
+
+
+# ---------------- 厂商侧失效（远端 403 额度耗尽）自动标记 ----------------
+def test_disabled_model_excluded_from_auto(client, auth):
+    """管理面把模型置为离线(enabled=False)后，自动选择不再选它。"""
+    client.put("/admin/models/gpt-4o-mini", headers=auth, json={"enabled": False})
+    r = _chat(client, [{"role": "user", "content": "hi"}])
+    assert r.status_code == 200
+    assert r.json()["model"] != "gpt-4o-mini"
+
+
+def test_disabled_pin_falls_back_to_auto(client, auth):
+    """指定一个已离线(enabled=False)模型 → 按未传处理自动改选，并回写降级头。"""
+    client.put("/admin/models/gpt-4o-mini", headers=auth, json={"enabled": False})
+    r = _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
+    assert r.status_code == 200
+    assert r.json()["model"] != "gpt-4o-mini"
+    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "unavailable"
+
+
+class _FakeQuotaForbidden(Exception):
+    status_code = 403
+
+    def __str__(self):
+        return (
+            "Error code: 403 - {'error': {'message': 'Free quota exhausted. "
+            "To continue accessing the model on a paid basis, please add funds or "
+            "disable the \"use free tier only\" mode.', 'type': 'AllocationQuota.FreeTierOnly'}}"
+        )
+
+
+async def _fake_complete_forbidden(*args, **kwargs):
+    raise _FakeQuotaForbidden()
+
+
+def test_remote_403_quota_exhausted_disables_model(client, monkeypatch):
+    """远端返回 403 额度耗尽 → 模型被自动置为失效，且后续请求不再选它。
+
+    TestClient 默认 raise_server_exceptions=True，未捕获异常会直接抛出，
+    因此用 pytest.raises 接住；补丁仅作用于第一次调用，第二次恢复真实执行器。
+    """
+    with monkeypatch.context() as mp:
+        mp.setattr("app.routers.openai.complete", _fake_complete_forbidden)
+        with pytest.raises(Exception):
+            _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
+
+    from app import models as M
+    from app.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        m = db.get(M.Model, "gpt-4o-mini")
+        assert m.enabled is False
+        # 以 manual_disabled 钉死：不被 sync 自动复活，管理员显式启用才恢复
+        assert m.manual_disabled is True
+    finally:
+        db.close()
+
+    # 再次自动请求（补丁已退出，走 mock 执行器）：已失效模型不再被选中
+    r2 = _chat(client, [{"role": "user", "content": "hi"}])
+    assert r2.status_code == 200
+    assert r2.json()["model"] != "gpt-4o-mini"
+
+
+def test_remote_403_model_stays_disabled_after_sync(client, monkeypatch):
+    """远端 403 钉死后，即便账本额度充足，sync_model_states 也不能把它复活。"""
+    with monkeypatch.context() as mp:
+        mp.setattr("app.routers.openai.complete", _fake_complete_forbidden)
+        with pytest.raises(Exception):
+            _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
+
+    from app import models as M
+    from app.db import SessionLocal
+    from app.ledger.book import sync_model_states
+
+    db = SessionLocal()
+    try:
+        sync_model_states(db)  # 模拟管理面的周期同步
+        m = db.get(M.Model, "gpt-4o-mini")
+        assert m.manual_disabled is True
+        assert m.enabled is False  # 没有被 sync 拉起
+    finally:
+        db.close()
 

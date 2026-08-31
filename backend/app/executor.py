@@ -192,6 +192,24 @@ def _truncate_log_value(value, limit: int = 2000) -> str:
     return text
 
 
+# 远端 403 且信息含此类字样 → 视为厂商侧额度耗尽（免费额度用尽 / free tier only 等）
+_QUOTA_EXHAUSTED_KEYWORDS = ("quota", "exhaust", "free tier", "allocationquota", "exceed")
+
+
+def is_quota_exhausted_forbidden(exc) -> bool:
+    """判断厂商异常是否为「403 + 额度耗尽」类错误。
+
+    典型场景：免费额度耗尽（`Free quota exhausted` / `AllocationQuota.FreeTierOnly`）。
+    命中后调用方应直接将该模型置为失效（enabled=False），避免反复打到已失效的模型。
+    需要同时满足：HTTP 状态为 403（或异常文本含 403），且文本含额度耗尽类字样。
+    """
+    status = getattr(exc, "status_code", None)
+    low = str(exc).lower()
+    if status != 403 and "403" not in low:
+        return False
+    return any(k in low for k in _QUOTA_EXHAUSTED_KEYWORDS)
+
+
 async def _mock_stream(rid: str, model_id: str, content: str, usage: dict) -> AsyncIterator[dict]:
     yield {
         "id": rid,
