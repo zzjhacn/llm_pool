@@ -29,9 +29,7 @@ STRUCTURED_CAPS = {"json_schema", "json_object", "function_calling"}
 # 指定模型被「按未传处理」（回退自动选择）的原因文案
 PIN_DROP_REASONS = {
     "not_found": "模型中不存在该名称",
-    "expired": "模型已过期",
-    "quota_exhausted": "模型额度已耗尽",
-    "unavailable": "模型不可用",
+    "unavailable": "模型不可用（已停用/过期/额度耗尽）",
 }
 
 
@@ -49,19 +47,34 @@ class RouteResult:
     pin_dropped: Optional[str] = None
 
 
+def _model_basically_usable(m: "models.Model") -> bool:
+    """仅看生命周期/开关/额度：平台启用 + 模型启用 + 未过期 + 额度充足。
+    不在此检查能力——能力是请求驱动的，留给主循环按请求所需能力过滤。"""
+    plat = m.platform
+    if not plat or not plat.enabled:
+        return False
+    if not m.enabled or m.manual_disabled:
+        return False
+    if m.is_expired:
+        return False
+    if m.has_quota and (m.quota_balance_eff or 0.0) <= 0.0:
+        return False
+    return True
+
+
 def _resolve_pin(session: Session, pinned: str) -> tuple[Optional[str], Optional[str]]:
     """判定客户端指定的模型名是否继续生效。
 
-    返回 (生效的 pinned, 丢弃原因)；丢弃原因非 None 时表示该模型「按未传处理」，
+    返回 (生效的 pinned, 丢弃原因)；丢弃原因非 None 表示该模型「按未传处理」，
     请求进入自动选择逻辑，不再因它报 400。
 
-    仅以下三种情况降级为自动选择：
+    指定模型「基础层面不可用」时降级为自动选择，包括：
       - not_found：池中不存在该名称（既不匹配 Model.id 也不匹配 provider_model）
-      - expired：存在但已过期
-      - quota_exhausted：存在但额度耗尽
+      - unavailable：存在但被停用/平台禁用/已过期/额度耗尽（任一匹配模型都不具备基础可用性）
 
-    其余不可用原因（平台/模型被停用、能力不匹配等）属于显式配置或强一致约束，
-    不自动降级，仍走原来的 400 早失败，避免悄悄把请求转到不相干的模型上。
+    同名可能命中多个平台上的模型：只要有一个匹配模型基础可用，就继续锁定该名字。
+    注意：能力不匹配（如指定仅 json_object 的模型却要 json_schema）不属于此处降级范围，
+    仍由主循环走 400 早失败，避免悄悄把强一致请求转到不相干的模型上。
     """
     matches = (
         session.query(models.Model)
@@ -71,20 +84,9 @@ def _resolve_pin(session: Session, pinned: str) -> tuple[Optional[str], Optional
     if not matches:
         return None, "not_found"
 
-    # 同名可能命中多个平台上的模型：只要有一个可用就继续锁定
-    drop_reasons: set[str] = set()
-    for m in matches:
-        if m.is_expired:
-            drop_reasons.add("expired")
-        elif m.quota_exhausted:
-            drop_reasons.add("quota_exhausted")
-        else:
-            return pinned, None
-
-    if drop_reasons == {"expired"}:
-        return None, "expired"
-    if drop_reasons == {"quota_exhausted"}:
-        return None, "quota_exhausted"
+    # 只要有一个匹配模型基础可用，就继续锁定；否则整体降级为自动选择
+    if any(_model_basically_usable(m) for m in matches):
+        return pinned, None
     return None, "unavailable"
 
 
@@ -194,9 +196,14 @@ def route(
         candidates.append((m, est_cost))
 
     if pin_effective and not candidates:
+        # 走到这里说明指定模型存在且基础可用，但因能力不满足无法服务；
+        # 其余「不可用」情形（不存在/停用/过期/额度耗尽）已在 _resolve_pin 中降级为自动选择。
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"指定模型 {pin_effective} 不可用（平台/模型被停用或能力不满足）；请求需要能力 {sorted(required)}",
+            detail=(
+                f"指定模型 {pin_effective} 不满足请求所需能力 {sorted(required)}；"
+                f"请改用支持该能力的模型，或不传 model 由网关自动选择。"
+            ),
         )
 
     if not candidates:

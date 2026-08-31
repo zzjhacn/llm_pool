@@ -16,7 +16,7 @@
         · 通过网关的 OpenAI 兼容接口验证模型能力：对话走 <code>/v1/chat/completions</code>，嵌入走 <code>/v1/embeddings</code>。<br />
         · <b>网关 Key</b>：调业务接口所需的 key（默认 <code>gpk-default</code>，部署时由 <code>LLM_POOL_GATEWAY_KEYS</code> 决定），仅本机 localStorage 记忆、不落库。<br />
         · <b>模型</b>留空 = 由网关按策略自动选择（对话按能力/余额/成本；嵌入按 embedding 能力）；指定则锁定到该模型。<br />
-        · 指定的模型若<b>不存在 / 已过期 / 额度耗尽</b>，网关按「未传」处理自动改选，并在结果区给出降级提示；被停用或能力不足仍会直接报错。<br />
+        · 指定的模型若<b>不存在 / 已停用 / 已过期 / 额度耗尽</b>，网关按「未传」处理自动改选，并在结果区给出降级提示；仅<b>能力不满足</b>（强一致场景，如指定仅支持 json_object 的模型却要 json_schema）仍会直接报错。<br />
         · 接口返回中 <b>model</b> 字段即本次实际路由到的模型，可据此判断自动路由结果。
       </div>
     </el-alert>
@@ -89,7 +89,7 @@
             :closable="false"
             show-icon
             style="margin-bottom: 12px"
-            :title="`指定的模型 ${meta.pinRequested} 不可用（${pinDropText}），已自动改选为 ${meta.model}`"
+            :title="`指定的模型 ${meta.pinRequested} 在本网关暂不可用，已自动改选为 ${meta.model}`"
           />
           <el-descriptions :column="1" border size="small">
             <el-descriptions-item label="路由模型">{{ meta.model }}</el-descriptions-item>
@@ -118,7 +118,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import axios from 'axios'
 import { api } from '../api'
 import { ElMessage } from 'element-plus'
@@ -147,14 +147,6 @@ const meta = ref(null)
 const chatHttp = axios.create({ baseURL: '' })
 
 // 指定模型被网关降级时回写的响应头（axios 会把 header 名转成小写）
-const PIN_DROP_TEXT = {
-  not_found: '池中不存在该名称',
-  expired: '已过期',
-  quota_exhausted: '额度已耗尽',
-  unavailable: '不可用',
-}
-const pinDropText = computed(() => PIN_DROP_TEXT[meta.value?.pinDropped] || meta.value?.pinDropped || '')
-
 function pinInfo(resp) {
   const h = (resp && resp.headers) || {}
   const dropped = h['x-llm-pool-pin-dropped']

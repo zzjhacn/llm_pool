@@ -42,12 +42,12 @@ def test_pinned_nonexistent_falls_back_to_auto(client):
 
 
 def test_pinned_expired_falls_back_to_auto(client, auth):
-    """指定模型已过期 → 按未传处理。"""
+    """指定模型已过期 → 按未传处理（降级原因为 unavailable）。"""
     client.put("/admin/models/gpt-4o-mini", headers=auth, json={"expired_at": "2020-01-01"})
     r = _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
     assert r.status_code == 200
     assert r.json()["model"] != "gpt-4o-mini"
-    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "expired"
+    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "unavailable"
 
 
 def test_pinned_quota_exhausted_falls_back_to_auto(client, auth):
@@ -57,7 +57,7 @@ def test_pinned_quota_exhausted_falls_back_to_auto(client, auth):
     r = _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
     assert r.status_code == 200
     assert r.json()["model"] != "gpt-4o-mini"
-    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "quota_exhausted"
+    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "unavailable"
 
 
 def test_pinned_provider_model_name_works(client):
@@ -67,11 +67,34 @@ def test_pinned_provider_model_name_works(client):
     assert r.json()["model"] == "deepseek-self"
 
 
-def test_pinned_disabled_still_returns_400(client, auth):
-    """被显式停用的模型不自动降级（管理员主动操作），仍早失败。"""
+def test_pinned_disabled_falls_back_to_auto(client, auth):
+    """被显式停用的模型应按「未传」处理（与不存在/过期/额度耗尽一致），自动改选。"""
     client.put("/admin/models/gpt-4o-mini", headers=auth, json={"manual_disabled": True})
     r = _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
+    assert r.status_code == 200
+    assert r.json()["model"] != "gpt-4o-mini"
+    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "unavailable"
+
+
+def test_pinned_platform_disabled_falls_back_to_auto(client, auth):
+    """模型所在平台被停用，也应降级为自动选择。"""
+    client.put("/admin/platforms/openai", headers=auth, json={"enabled": False})
+    r = _chat(client, [{"role": "user", "content": "hi"}], model="gpt-4o-mini")
+    assert r.status_code == 200
+    assert r.json()["model"] != "gpt-4o-mini"
+    assert r.headers["X-LLM-Pool-Pin-Dropped"] == "unavailable"
+
+
+def test_pinned_capability_mismatch_still_returns_400(client):
+    """能力不匹配（强一致场景）不属于降级范围，仍早失败。"""
+    r = _chat(
+        client,
+        [{"role": "user", "content": "请回答"}],
+        model="qwen-max",
+        response_format={"type": "json_schema", "json_schema": {"name": "X"}},
+    )
     assert r.status_code == 400
+    assert "json_schema" in r.json()["detail"]
     assert "X-LLM-Pool-Pin-Dropped" not in r.headers
 
 
