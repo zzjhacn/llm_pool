@@ -188,11 +188,3 @@ llm_pool/
 ## License
 
 [MIT](LICENSE) © 2026 Gray
-信用卡
-8.18 115.66 - uber
-8.13 88.64 - uber
-8.11 1098.43 - dopadonburianddesse
-8.9 678.77 - pancakesontherocks
-8.9 475.76 - pancakesontherocks
-
-
